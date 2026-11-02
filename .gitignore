@@ -1,21 +1,59 @@
+
+# ==========================================
 # Python
+# ==========================================
 venv/
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
 
-# Generated data (big / private / rebuildable)
+# ==========================================
+# Environment and Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Generated Data (Large / Private / Rebuildable)
+# ==========================================
 data/chroma_db/
 backups/
 logs/
 
-# Excel files (private data + temp lock files)
+# ==========================================
+# Excel Files (Private Data + Temporary Files)
+# ==========================================
 *.xlsx
 *.xls
 *.xlsm
 *.csv
 ~$*
 
-# Editor / OS
+# ==========================================
+# Editor and Operating System
+# ==========================================
 .vscode/
 .DS_Store
+
+# ==========================================
+# Python Testing and Cache
+# ==========================================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# Jupyter Notebook
+# ==========================================
+.ipynb_checkpoints/
+
+# ==========================================
+# Temporary Files
+# ==========================================
+*.tmp
+*.bak
+*.swp
