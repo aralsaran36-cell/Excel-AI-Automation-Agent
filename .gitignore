@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Generated data (big / private / rebuildable)
+data/chroma_db/
+backups/
+logs/
+
+# Excel files (private data + temp lock files)
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+~$*
+
+# Editor / OS
+.vscode/
+.DS_Store

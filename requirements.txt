@@ -1,0 +1,22 @@
+# UI
+streamlit==1.66.1
+
+# LLM
+ollama==0.6.3
+
+# Excel automation + data
+xlwings==0.37.8
+pandas==2.2.3
+
+# MCP
+mcp==1.30.0
+
+# RAG
+chromadb==1.5.9
+llama-index-core==0.14.25
+llama-index-embeddings-huggingface==0.8.0
+llama-index-vector-stores-chroma==0.6.0
+llama-index-retrievers-bm25==0.8.0
+sentence-transformers==3.3.1
+torch==2.2.2
+transformers==4.44.2
