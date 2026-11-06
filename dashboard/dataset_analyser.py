@@ -1,7 +1,8 @@
 """Dataset analyser: understands a sheet's structure for the dashboard modules.
 
 Read-only. analyse_dataframe() is pure pandas (testable without Excel).
-analyse_sheet() reads the active (or named) sheet through excel_tools.
+Numeric columns are classified with measure_rules:
+  sum/mean/binary -> "numeric" (usable measures), discrete -> "categorical", id -> "id".
 Test: python -m dashboard.dataset_analyser
 """
 from __future__ import annotations
@@ -10,11 +11,11 @@ from typing import Any
 
 import pandas as pd
 
+from dashboard.measure import classify_measure
 from excel_tools.workbook_manager import get_sheet, load_dataframe
 
 CATEGORY_MAX_UNIQUE = 30      # <= this many distinct values -> usable as a category
 CATEGORY_MAX_RATIO = 0.5      # and not more than half of the rows
-ID_NAME_HINTS = ("id", "rukku", "index", "no", "number", "code")
 DATE_TEXT_PATTERN = r"^\d{4}-\d{1,2}-\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?$"
 
 
@@ -37,45 +38,44 @@ def parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _is_id_like(name: str, series: pd.Series) -> bool:
-    """Unique-per-row columns or id-named integer columns are not real measures."""
+def _classify(name: str, series: pd.Series) -> tuple[str, str | None]:
+    """Return (kind, measure_kind). kind: date, numeric, categorical, id, text, empty."""
     non_null = series.dropna()
     if non_null.empty:
-        return False
-    all_unique = non_null.nunique() == len(non_null) and len(non_null) > 1
-    lowered = name.strip().lower()
-    named_id = lowered in ID_NAME_HINTS or lowered.endswith(("_id", " id"))
-    return all_unique and named_id 
-
-
-def _classify(name: str, series: pd.Series) -> str:
-    """Return one of: date, numeric, categorical, id, text, empty."""
-    non_null = series.dropna()
-    if non_null.empty:
-        return "empty"
+        return "empty", None
     if pd.api.types.is_datetime64_any_dtype(series):
-        return "date"
+        return "date", None
     if pd.api.types.is_bool_dtype(series):
-        return "categorical"
+        return "categorical", None
     if pd.api.types.is_numeric_dtype(series):
-        return "id" if _is_id_like(name, series) else "numeric"
+        measure = classify_measure(pd.DataFrame({name: series}), name)
+        if measure == "id":
+            return "id", measure
+        if measure == "discrete":
+            if non_null.nunique() <= CATEGORY_MAX_UNIQUE:
+                return "categorical", measure     # Pclass, SibSp, year behave like categories
+            return "numeric", "mean"
+        if measure == "skip":
+            return "empty", None
+        return "numeric", measure                 # sum, mean or binary
     if series.map(lambda v: hasattr(v, "year") and hasattr(v, "month")).all():
-        return "date"
+        return "date", None
     unique = non_null.nunique()
     if unique <= CATEGORY_MAX_UNIQUE and unique / len(non_null) <= CATEGORY_MAX_RATIO:
-        return "categorical"
-    return "id" if unique == len(non_null) else "text"
+        return "categorical", None
+    return ("id" if unique == len(non_null) else "text"), None
 
 
 def analyse_dataframe(df: pd.DataFrame) -> dict[str, Any]:
-    """Analyse a DataFrame. Returns a plain dict used by kpi/chart selectors."""
+    """Analyse a DataFrame. Returns a plain dict used by the kpi/chart selectors."""
     if df is None or df.empty:
-        return {"success": False, "error": "Dataset empty-a irukku."}
+        return {"success": False, "error": "Dataset is empty."}
 
     columns: dict[str, dict[str, Any]] = {}
+    measures: dict[str, str] = {}
     for name in df.columns:
         series = df[name]
-        kind = _classify(name, series)
+        kind, measure = _classify(str(name), series)
         info: dict[str, Any] = {
             "kind": kind,
             "missing": int(series.isna().sum()),
@@ -83,7 +83,8 @@ def analyse_dataframe(df: pd.DataFrame) -> dict[str, Any]:
         }
         if kind == "numeric":
             info.update(sum=float(series.sum()), mean=float(series.mean()),
-                        min=float(series.min()), max=float(series.max()))
+                        min=float(series.min()), max=float(series.max()), measure=measure)
+            measures[str(name)] = measure
         elif kind == "categorical":
             info["top_values"] = [str(v) for v in series.value_counts().head(5).index]
         elif kind == "date":
@@ -99,6 +100,8 @@ def analyse_dataframe(df: pd.DataFrame) -> dict[str, Any]:
         "column_count": len(df.columns),
         "columns": columns,
         "numeric": of_kind("numeric"),
+        "measures": measures,                       # column -> sum | mean | binary
+        "binary": [c for c, m in measures.items() if m == "binary"],
         "categorical": of_kind("categorical"),
         "date": of_kind("date"),
         "id": of_kind("id"),
@@ -128,9 +131,8 @@ if __name__ == "__main__":
     else:
         print(f"{out['workbook']} / {out['sheet']}: {out['rows']} rows, {out['column_count']} columns")
         for col, info in out["columns"].items():
-            print(f"  {col:<12} {info['kind']:<12} missing={info['missing']} unique={info['unique']}")
-        print("numeric    :", out["numeric"])
+            print(f"  {col:<14} {info['kind']:<12} {info.get('measure') or '':<7} unique={info['unique']}")
+        print("measures   :", out["measures"])
         print("categorical:", out["categorical"])
         print("date       :", out["date"])
         print("id         :", out["id"])
-        print("missing_total:", out["missing_total"], "| duplicate_rows:", out["duplicate_rows"])

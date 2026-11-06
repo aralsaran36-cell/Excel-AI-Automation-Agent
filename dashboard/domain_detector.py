@@ -10,28 +10,39 @@ import re
 from typing import Any
 
 DOMAINS: dict[str, dict[str, Any]] = {
-    "Sales": {"theme": "blue", "keywords": [
+    "Sales": {"theme": "blue", "title": "Sales Dashboard", "keywords": [
         "revenue", "sales", "units", "price", "order", "product", "customer",
         "discount", "channel", "region", "quantity"]},
-    "HR": {"theme": "purple", "keywords": [
+    "HR": {"theme": "purple", "title": "HR Dashboard", "keywords": [
         "salary", "employee", "department", "designation", "hire", "attrition",
         "experience", "gender", "manager", "staff"]},
-    "Education": {"theme": "orange", "keywords": [
+    "Education": {"theme": "orange", "title": "Education Dashboard", "keywords": [
         "marks", "score", "subject", "student", "grade", "class", "exam",
         "attendance", "teacher", "semester"]},
-    "Finance": {"theme": "green", "keywords": [
+    "Finance": {"theme": "green", "title": "Finance Dashboard", "keywords": [
         "expense", "income", "profit", "budget", "balance", "account", "tax",
         "cost", "loss", "payment"]},
-    "Inventory": {"theme": "teal", "keywords": [
+    "Inventory": {"theme": "teal", "title": "Inventory Dashboard", "keywords": [
         "stock", "inventory", "sku", "warehouse", "supplier", "reorder", "shipment"]},
-    "Healthcare": {"theme": "teal", "keywords": [
+    "Healthcare": {"theme": "teal", "title": "Healthcare Dashboard", "keywords": [
         "patient", "diagnosis", "doctor", "hospital", "treatment", "bed", "disease"]},
+    "Passengers": {"theme": "slate", "title": "Passenger Survival Dashboard", "keywords": [
+        "passenger", "survived", "pclass", "sibsp", "parch", "embarked", "cabin", "ticket"]},
+    "Survey": {"theme": "slate", "title": "Survey Dashboard", "keywords": [
+        "survey", "response", "respondent", "rating", "feedback", "satisfaction", "question", "nps"]},
+    "Customer": {"theme": "slate", "title": "Customer Dashboard", "keywords": [
+        "churn", "subscription", "tenure", "segment", "contract", "loyalty", "customer", "plan"]},
+    "Marketing": {"theme": "slate", "title": "Marketing Dashboard", "keywords": [
+        "campaign", "impressions", "clicks", "ctr", "conversion", "ads", "lead", "channel"]},
+    "Transport": {"theme": "slate", "title": "Transport Dashboard", "keywords": [
+        "trip", "route", "vehicle", "driver", "distance", "ride", "fare", "pickup"]},
 }
 DEFAULT = {"domain": "General", "score": 0, "title": "Data Dashboard", "theme": "slate"}
 
 
 def _tokens(name: str) -> set[str]:
-    return {t for t in re.split(r"[^a-z0-9]+", str(name).lower()) if t}
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(name))      # PassengerId -> Passenger Id
+    return {t for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t}
 
 
 def _matches(tokens: set[str], keyword: str) -> bool:
@@ -50,18 +61,18 @@ def detect_domain(columns: list[str]) -> dict[str, Any]:
             best_name, best_score = name, score
     if best_name is None or best_score < 2:   # 1 match alone is too weak
         return dict(DEFAULT)
-    return {"domain": best_name, "score": best_score,
-            "title": f"{best_name} Dashboard", "theme": DOMAINS[best_name]["theme"]}
+    cfg = DOMAINS[best_name]
+    return {"domain": best_name, "score": best_score, "title": cfg["title"], "theme": cfg["theme"]}
 
 
 if __name__ == "__main__":
     cases = {
-        "sales":     ["rukku", "region", "product", "channel", "units", "unit_price", "revenue"],
-        "hr":        ["emp_id", "employee_name", "department", "salary", "hire_date", "gender"],
-        "education": ["student", "subject", "marks", "grade"],
-        "finance":   ["account", "income", "expense", "balance"],
-        "unknown":   ["a", "b", "c"],
+        "sales": ["order_id", "region", "product", "channel", "units", "unit_price", "revenue"],
+        "hr": ["emp_id", "employee_name", "department", "salary", "hire_date", "gender"],
+        "titanic": ["PassengerId", "Survived", "Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Fare"],
+        "survey": ["respondent", "rating", "feedback", "question"],
+        "unknown": ["a", "b", "c"],
     }
     for label, cols in cases.items():
         r = detect_domain(cols)
-        print(f"{label:<10} -> {r['domain']:<10} score={r['score']} theme={r['theme']} title={r['title']}")
+        print(f"{label:<10} -> {r['domain']:<12} score={r['score']} title={r['title']}")

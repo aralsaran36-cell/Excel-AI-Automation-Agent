@@ -57,7 +57,7 @@ class MCPClient:
     async def _own_connection(self, ready: asyncio.Event, stop: asyncio.Event) -> None:
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "mcp_layer.server"],
+            args=["-u", "-m", "mcp_layer.server"],  # -u ensures unbuffered output
             cwd=str(ROOT),
         )
         try:
@@ -68,11 +68,15 @@ class MCPClient:
                     ready.set()
                     await stop.wait()  # stay alive until disconnect() asks us to stop
         except Exception as exc:
+            # FIXED: Always capture exception so we know why it crashed, even post-connection!
+            self._error = exc
+            print(f"[MCP Client Error] Server process crashed: {exc}", file=sys.stderr)
             if not ready.is_set():
-                self._error = exc
+                ready.set()
         finally:
             self.session = None
-            ready.set()
+            if not ready.is_set():
+                ready.set()
 
     async def get_tools(self) -> list[Any]:
         session = self._require_session()

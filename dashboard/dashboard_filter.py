@@ -38,14 +38,14 @@ def _match_column(df: pd.DataFrame, name: str) -> str:
     for col in df.columns:
         if str(col).strip().lower() == wanted:
             return col
-    raise ValueError(f"Column '{name}' illa. Available: {list(df.columns)}")
+    raise ValueError(f"Column '{name}' not found. Available: {list(df.columns)}")
 
 
 def _mask(df: pd.DataFrame, rule: dict[str, Any]) -> pd.Series:
     col = _match_column(df, rule.get("column", ""))
     op, value = rule.get("op", "=="), rule.get("value")
     if op not in OPS:
-        raise ValueError(f"Operator '{op}' support illa. Allowed: {sorted(OPS)}")
+        raise ValueError(f"Operator '{op}' is not supported. Allowed: {sorted(OPS)}")
     series = df[col]
 
     if op in {"in", "not_in"}:
@@ -68,11 +68,11 @@ def _mask(df: pd.DataFrame, rule: dict[str, Any]) -> pd.Series:
         if op in {"==", "!="}:
             same = series.astype(str).str.strip().str.lower() == str(value).strip().lower()
             return same if op == "==" else ~same
-        raise ValueError(f"'{col}' text column, '{op}' use pannamudiyaadhu.")
+        raise ValueError(f"'{col}' is a text column, '{op}' cannot be used.")
 
     if op == "between":
         if not isinstance(value, (list, tuple)) or len(value) != 2:
-            raise ValueError("between-ku [low, high] venum.")
+            raise ValueError("between needs [low, high].")
         low, high = convert(value[0]), convert(value[1])
         return series.between(low, high)
     target = convert(value)
@@ -94,7 +94,7 @@ def apply_filters(df: pd.DataFrame, rules: list[dict[str, Any]] | None) -> dict[
         return {"success": False, "error": str(exc)}
     out = df[mask].reset_index(drop=True)
     if out.empty:
-        return {"success": False, "error": "Indha filter-ku match aagura rows illa.", "applied": applied}
+        return {"success": False, "error": "No rows match this filter.", "applied": applied}
     return {"success": True, "df": out, "applied": applied, "rows_before": len(df), "rows_after": len(out)}
 
 
@@ -104,9 +104,11 @@ if __name__ == "__main__":
         "units": [10, 20, 30, 40],
         "day": pd.to_datetime(["2025-01-05", "2025-02-10", "2025-03-15", "2025-04-20"]),
     })
+
     def show(label: str, rules):
         r = apply_filters(demo, rules)
         print(f"{label:<28}", r["rows_after"] if r["success"] else "ERROR: " + r["error"])
+
     show("no rules", [])
     show("region == emea (case)", [{"column": "Region", "op": "==", "value": "emea"}])
     show("region in EMEA,APAC", [{"column": "region", "op": "in", "value": ["EMEA", "APAC"]}])

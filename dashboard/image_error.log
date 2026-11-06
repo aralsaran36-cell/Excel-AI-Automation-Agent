@@ -1,0 +1,32 @@
+Traceback (most recent call last):
+  File "/Users/admin/Documents/Excel Agent/venv/lib/python3.12/site-packages/aeosa/appscript/reference.py", line 479, in __call__
+    return self.AS_appdata.target().event(self._code, params, atts, codecs=self.AS_appdata).send(timeout, sendflags)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/venv/lib/python3.12/site-packages/aeosa/aem/aemsend.py", line 92, in send
+    raise EventError(errornum, errormsg, eventresult)
+aem.aemsend.EventError: Command failed: Parameter error. (-50)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/admin/Documents/Excel Agent/dashboard/auto_dashboard.py", line 366, in auto_dashboard
+    return _build_image_dashboard(data, source, domain, design,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/dashboard/auto_dashboard.py", line 306, in _build_image_dashboard
+    sheet = _new_sheet(book)
+            ^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/dashboard/auto_dashboard.py", line 136, in _new_sheet
+    return book.sheets.add(name, after=book.sheets[-1])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/venv/lib/python3.12/site-packages/xlwings/main.py", line 10257, in add
+    impl = self.impl.add(before and before.impl, after and after.impl, name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/venv/lib/python3.12/site-packages/xlwings/_xlmac.py", line 650, in add
+    xl = self.workbook.xl.make(new=kw.worksheet, at=position)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/Excel Agent/venv/lib/python3.12/site-packages/aeosa/appscript/reference.py", line 515, in __call__
+    raise CommandError(self, (args, kargs), e, self.AS_appdata) from e
+appscript.reference.CommandError: Command failed:
+		OSERROR: -50
+		MESSAGE: Parameter error.
+		COMMAND: app(pid=81322).workbooks['email.csv'].make(new=k.worksheet, at=app(pid=81322).workbooks['email.csv'].worksheets[1].after)

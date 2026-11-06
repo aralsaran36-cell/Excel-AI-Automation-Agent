@@ -12,7 +12,8 @@ import xlwings as xw
 
 BACKUP_DIR = Path(__file__).resolve().parent.parent / "backups"
 ADDRESS_RE = re.compile(r"^\$?[A-Za-z]{1,3}\$?\d{1,7}(:\$?[A-Za-z]{1,3}\$?\d{1,7})?$")
-EXCEL_ERRORS = {"#NAME?", "#DIV/0!", "#VALUE!", "#REF!", "#N/A", "#NUM!", "#NULL!"}
+EXCEL_ERRORS = {"#NAME?", "#DIV/0!", "#VALUE!", "#REF!", "#N/A", "#NUM!", "#NULL!",
+                "#SPILL!", "#CALC!"}
 CONDITIONS = (
     "equals", "not_equals", "greater_than", "less_than",
     "greater_or_equal", "less_or_equal", "contains", "is_empty",

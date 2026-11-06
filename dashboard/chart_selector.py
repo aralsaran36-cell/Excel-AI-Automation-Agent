@@ -1,9 +1,10 @@
 """Chart selector: scores candidate charts and keeps only the useful ones.
 
-Returns plans only (no Excel access). Number of charts is dynamic (1..MAX_CHARTS),
-decided by how many candidates score above MIN_SCORE.
-- auto_charts(df, analysis): Auto Dashboard.
+Returns plans only (no Excel access). Uses measure rules, so the aggregation is right:
+sum measure -> sum, everything else -> average, 0/1 column -> rate by category.
+- auto_charts(df, analysis, variant=0): chart COUNT (3..6) depends on how rich the data is.
 - build_charts(df, requests): Guided Dashboard validates user-chosen charts.
+Constants live in dashboard_config.py.
 Test (no Excel needed): python -m dashboard.chart_selector
 """
 from __future__ import annotations
@@ -12,37 +13,18 @@ from typing import Any
 
 import pandas as pd
 
-MAX_CHARTS = 6
-SCATTER_ENABLED = False   # scatter plotted wrong on Mac (x = row number); re-enable after the fix
-MIN_CHARTS = 1
-MIN_SCORE = 50
-PIE_MAX_CATEGORIES = 5
-BAR_MAX_CATEGORIES = 15
-TOP_N = 10
-CHART_TYPES = {"bar", "line", "pie", "column", "scatter", "stacked"}
+from dashboard.dashboard_config import (
+    BAR_MAX_CATEGORIES, MAX_CHARTS, MIN_CHARTS, MIN_SCORE, MIN_TARGET,
+    PIE_MAX_CATEGORIES, SCATTER_ENABLED, TOP_N,
+)
+from dashboard.measure import agg_for, classify_measure, rank_measures
+
+CHART_TYPES = {"bar", "line", "pie", "column", "scatter", "stacked", "hist"}
 AGGS = {"sum", "mean", "count", "min", "max", "median"}
-NO_SUM_HINTS = ("price", "rate", "percent", "pct", "ratio", "avg", "average", "margin")
-MAIN_MEASURE_HINTS = ("revenue", "sales", "amount", "total", "profit", "cost", "salary", "marks", "score")
 
 
 def _pretty(name: str) -> str:
-    return name.replace("_", " ").title()
-
-
-def _is_additive(column: str) -> bool:
-    return not any(h in column.lower() for h in NO_SUM_HINTS)
-
-
-def _measure_rank(numeric: list[str]) -> list[str]:
-    return sorted(numeric, key=lambda c: (
-        0 if _is_additive(c) else 1,
-        0 if any(h in c.lower() for h in MAIN_MEASURE_HINTS) else 1,
-        numeric.index(c)))
-
-
-def pick_main_measure(analysis: dict[str, Any]) -> str | None:
-    numeric: list[str] = analysis.get("numeric", [])
-    return _measure_rank(numeric)[0] if numeric else None
+    return str(name).replace("_", " ").title()
 
 
 def make_chart(df: pd.DataFrame, chart_type: str, category: str, measure: str,
@@ -50,35 +32,37 @@ def make_chart(df: pd.DataFrame, chart_type: str, category: str, measure: str,
                measure2: str | None = None, series: str | None = None) -> dict[str, Any]:
     """Validate one chart request and return its plan."""
     if chart_type not in CHART_TYPES:
-        raise ValueError(f"Chart type '{chart_type}' support illa. Allowed: {sorted(CHART_TYPES)}")
+        raise ValueError(f"Chart type '{chart_type}' is not supported. Allowed: {sorted(CHART_TYPES)}")
     needed = [category, measure] + ([measure2] if measure2 else []) + ([series] if series else [])
     for col in needed:
         if col not in df.columns:
-            raise ValueError(f"Column '{col}' illa. Available: {list(df.columns)}")
+            raise ValueError(f"Column '{col}' not found. Available: {list(df.columns)}")
     if not pd.api.types.is_numeric_dtype(df[measure]):
-        raise ValueError(f"'{measure}' numeric illa.")
+        raise ValueError(f"'{measure}' is not numeric.")
     if agg not in AGGS:
-        raise ValueError(f"Aggregation '{agg}' support illa.")
+        raise ValueError(f"Aggregation '{agg}' is not supported.")
     n_cat = int(df[category].nunique())
     if chart_type == "pie" and (n_cat > PIE_MAX_CATEGORIES or agg not in {"sum", "count"}):
-        raise ValueError("Pie chart: max 5 categories and sum/count mattum (misleading-a aagum).")
+        raise ValueError("Pie chart: max 5 categories and sum/count only (otherwise misleading).")
     if chart_type == "pie" and (df[measure] < 0).any():
-        raise ValueError("Pie chart-la negative values irukku.")
+        raise ValueError("Pie chart cannot have negative values.")
     if chart_type == "scatter":
         if not measure2 or not pd.api.types.is_numeric_dtype(df[measure2]):
-            raise ValueError("Scatter-ku rendu numeric columns venum.")
+            raise ValueError("Scatter needs two numeric columns.")
     if chart_type == "stacked" and not series:
-        raise ValueError("Stacked chart-ku series column venum.")
+        raise ValueError("Stacked chart needs a series column.")
     if title is None:
-        verb = {"sum": "", "mean": "Average "}.get(agg, f"{agg.title()} ")
+        rate = agg == "mean" and classify_measure(df, measure) == "binary"
+        verb = "" if agg == "sum" else ("Average " if agg == "mean" else f"{agg.title()} ")
+        name = f"{_pretty(measure)} Rate" if rate else f"{verb}{_pretty(measure)}"
         if chart_type == "scatter":
             title = f"{_pretty(measure)} vs {_pretty(measure2)}"
         elif chart_type == "stacked":
-            title = f"{verb}{_pretty(measure)} by {_pretty(category)} and {_pretty(series)}"
+            title = f"{name} by {_pretty(category)} and {_pretty(series)}"
         elif chart_type == "line":
-            title = f"{verb}{_pretty(measure)} Trend"
+            title = f"{name} Trend"
         else:
-            title = f"{verb}{_pretty(measure)} by {_pretty(category)}"
+            title = f"{name} by {_pretty(category)}"
     plan = {"type": chart_type, "category": category, "measure": measure,
             "agg": agg, "title": title, "categories": n_cat}
     if measure2:
@@ -88,71 +72,137 @@ def make_chart(df: pd.DataFrame, chart_type: str, category: str, measure: str,
     return plan
 
 
-def _candidates(df: pd.DataFrame, analysis: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
-    numeric = _measure_rank(analysis.get("numeric", []))
+def _add(out: list, score: int, *args, **kwargs) -> dict[str, Any] | None:
+    """Add a candidate; a request that fails validation is skipped, not fatal."""
+    try:
+        plan = make_chart(*args, **kwargs)
+    except ValueError:
+        return None
+    out.append((score, plan))
+    return plan
+
+
+def _context(df: pd.DataFrame, analysis: dict[str, Any]):
+    kinds: dict[str, str] = analysis.get("measures") or {
+        c: classify_measure(df, c) for c in analysis.get("numeric", [])}
+    ranked = rank_measures(kinds)
     cats = [c for c in analysis.get("categorical", []) if df[c].nunique() >= 2]
     dates = analysis.get("date", [])
+    return kinds, ranked, cats, dates
+
+
+def _target_count(df: pd.DataFrame, kinds, ranked, cats, dates, variant: int = 0) -> int:
+    """How many charts this dataset deserves: richer data -> more charts (3..6)."""
+    n = 1
+    if dates and df[dates[0]].nunique() >= 3:
+        n += 1                                                    # trend chart
+    n += min(len(cats), 2)                                        # one chart per main category
+    if len([m for m in ranked if kinds[m] in {"sum", "mean"}]) >= 2:
+        n += 1                                                    # second measure
+    if any(kinds[m] == "binary" for m in ranked):
+        n += 1                                                    # rate chart (e.g. survival)
+    if variant % 2 == 1:                                          # "another dashboard" changes the size a bit
+        n = n + 1 if n < MAX_CHARTS else n - 1
+    return max(MIN_TARGET, min(MAX_CHARTS, n))
+
+
+def _candidates(df: pd.DataFrame, analysis: dict[str, Any], variant: int = 0) -> list[tuple[int, dict[str, Any]]]:
+    kinds, ranked, cats, dates = _context(df, analysis)
     out: list[tuple[int, dict[str, Any]]] = []
-    if not numeric:
+    if not ranked:
         return out
-    main = numeric[0]
-    main_agg = "sum" if _is_additive(main) else "mean"
+    if variant:                                   # different look = different measure/category order
+        ranked = ranked[variant % len(ranked):] + ranked[:variant % len(ranked)]
+        if len(cats) > 1:
+            shift = variant % len(cats)
+            cats = cats[shift:] + cats[:shift]
+    main = ranked[0]
+    main_agg = agg_for(kinds[main])
 
     # Trend over time: strongest chart when a date exists.
     for d in dates[:1]:
         if df[d].nunique() >= 3:
-            out.append((95, make_chart(df, "line", d, main, main_agg)))
+            _add(out, 95, df, "line", d, main, main_agg)
 
-    # Category x measure (bar / pie / top-N).
+    # Distribution of an attribute (Age Distribution, Fare Distribution).
+    for m in ranked:
+        if kinds[m] == "mean" and df[m].nunique() >= 10:
+            _add(out, 78, df, "hist", m, m, "count", f"{_pretty(m)} Distribution")
+            break
+
+    # Record counts by category (Passengers by Class, Orders by Region).
+    count_col = next((c for c in analysis.get("id", []) if pd.api.types.is_numeric_dtype(df[c])), main)
+    for ci, cat in enumerate(cats[:2]):
+        n = int(df[cat].nunique())
+        title = f"Records by {_pretty(cat)}"
+        if n <= PIE_MAX_CATEGORIES:
+            _add(out, 84 - ci * 6, df, "pie", cat, count_col, "count", title)
+        elif n <= BAR_MAX_CATEGORIES:
+            _add(out, 80 - ci * 6, df, "bar", cat, count_col, "count", title)
+
+    # Category x measure (bar / pie / top-N). 0/1 columns become "rate by category".
     for ci, cat in enumerate(cats):
         n = int(df[cat].nunique())
-        for mi, meas in enumerate(numeric[:3]):
-            agg = "sum" if _is_additive(meas) else "mean"
-            base = 90 - ci * 6 - mi * 22          # main measure first, later ones lower
-            if n <= PIE_MAX_CATEGORIES and agg == "sum" and (df[meas] >= 0).all() and n <= 3 and mi == 0:
-                out.append((base, make_chart(df, "pie", cat, meas, agg)))
+        for mi, meas in enumerate(ranked[:3]):
+            agg = agg_for(kinds[meas])
+            base = 90 - ci * 6 - mi * 22
+            if n <= 3 and agg == "sum" and mi == 0 and (df[meas] >= 0).all():
+                _add(out, base, df, "pie", cat, meas, agg)
             elif n <= BAR_MAX_CATEGORIES:
-                out.append((base - (8 if n > 10 else 0), make_chart(df, "bar", cat, meas, agg)))
+                _add(out, base - (8 if n > 10 else 0), df, "bar", cat, meas, agg)
             else:
-                plan = make_chart(df, "bar", cat, meas, agg,
-                                  title=f"Top {TOP_N} {_pretty(cat)} by {_pretty(meas)}")
-                plan["top_n"] = TOP_N
-                out.append((base - 10, plan))
+                plan = _add(out, base - 10, df, "bar", cat, meas, agg,
+                            f"Top {TOP_N} {_pretty(cat)} by {_pretty(meas)}")
+                if plan:
+                    plan["top_n"] = TOP_N
 
     # Two categories -> stacked column (only if the grid is readable).
     if len(cats) >= 2:
         a, b = cats[0], cats[1]
         if df[a].nunique() <= 8 and df[b].nunique() <= 5:
-            out.append((70, make_chart(df, "stacked", a, main, main_agg, series=b)))
+            _add(out, 70, df, "stacked", a, main, main_agg, series=b)
 
     # Two numerics with a real relationship -> scatter.
-    if SCATTER_ENABLED and len(numeric) >= 2 and len(df) >= 10:
-        x, y = numeric[0], numeric[1]
+    if SCATTER_ENABLED and len(ranked) >= 2 and len(df) >= 10:
+        x, y = ranked[0], ranked[1]
         corr = df[x].corr(df[y])
         if pd.notna(corr) and abs(corr) >= 0.3:
-            out.append((int(55 + 40 * abs(corr)), make_chart(df, "scatter", x, x, "sum", measure2=y)))
+            _add(out, int(55 + 40 * abs(corr)), df, "scatter", x, x, "sum", measure2=y)
     return out
 
 
-def auto_charts(df: pd.DataFrame, analysis: dict[str, Any]) -> list[dict[str, Any]]:
-    """Pick useful charts. Count depends on the data (MIN_CHARTS..MAX_CHARTS)."""
+def auto_charts(df: pd.DataFrame, analysis: dict[str, Any], variant: int = 0) -> list[dict[str, Any]]:
+    """Pick useful charts. Count = _target_count (3..6), at most one bar/pie per category in pass 1."""
     if not analysis.get("success"):
         return []
-    scored = sorted(_candidates(df, analysis), key=lambda s: -s[0])
-    chosen, seen, used_categories = [], set(), set()
-    for score, plan in scored:
-        key = (plan["type"], plan["category"], plan["measure"], plan.get("series"), plan.get("measure2"))
-        if key in seen:
-            continue
-        if plan["type"] in {"bar", "pie"} and plan["category"] in used_categories:
-            continue  # one chart per category (no "Units by Region" after "Revenue by Region")
-        seen.add(key)
-        if score >= MIN_SCORE or len(chosen) < MIN_CHARTS:
+    kinds, ranked, cats, dates = _context(df, analysis)
+    if not ranked:
+        return []
+    target = _target_count(df, kinds, ranked, cats, dates, variant)
+    scored = sorted(_candidates(df, analysis, variant), key=lambda s: -s[0])
+    chosen: list[dict[str, Any]] = []
+    seen: set = set()
+    used_cat: set = set()
+    used_slot: set = set()
+    for strict in (True, False):                  # pass 2 relaxes "one chart per category" if still short
+        for score, plan in scored:
+            if len(chosen) >= target:
+                break
+            key = (plan["type"], plan["category"], plan["measure"], plan["agg"],
+                   plan.get("series"), plan.get("measure2"))
+            if key in seen:
+                continue
+            if plan["type"] in {"bar", "pie"}:
+                slot = (plan["category"], plan["agg"] == "count")
+                if slot in used_slot or (strict and plan["category"] in used_cat):
+                    continue
+            if score < MIN_SCORE and len(chosen) >= MIN_CHARTS:
+                continue
+            seen.add(key)
             chosen.append(plan)
             if plan["type"] in {"bar", "pie"}:
-                used_categories.add(plan["category"])
-        if len(chosen) >= MAX_CHARTS:
-            break
+                used_cat.add(plan["category"])
+                used_slot.add((plan["category"], plan["agg"] == "count"))
     return chosen
 
 
@@ -164,30 +214,14 @@ def build_charts(df: pd.DataFrame, requests: list[dict[str, Any]]) -> list[dict[
 
 if __name__ == "__main__":
     from dashboard.dataset_analyser import analyse_dataframe
-    import numpy as np
-    rng = np.random.default_rng(1)
-
-    sales = pd.DataFrame({
-        "region": rng.choice(["N", "S", "E", "W", "C"], 60),
-        "channel": rng.choice(["web", "shop", "app"], 60),
-        "units": rng.integers(1, 50, 60)})
-    sales["revenue"] = sales["units"] * rng.uniform(5, 6, 60)
-
-    hr = pd.DataFrame({
-        "department": rng.choice(["IT", "HR", "Ops", "Fin"], 80),
-        "gender": rng.choice(["M", "F"], 80),
-        "city": rng.choice([f"city{i}" for i in range(25)], 80),
-        "hire_date": pd.date_range("2022-01-01", periods=80, freq="7D"),
-        "salary": rng.integers(30000, 90000, 80)})
-
-    tiny = pd.DataFrame({"fruit": ["a", "b", "a", "c"], "qty": [3, 4, 5, 6]})
-
-    for label, frame in [("sales-like", sales), ("hr-like", hr), ("tiny", tiny)]:
-        plans = auto_charts(frame, analyse_dataframe(frame))
-        print(f"{label}: {len(plans)} charts")
+    titanic = pd.DataFrame({
+        "PassengerId": range(1, 13), "Survived": [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0],
+        "Pclass": [3, 1, 3, 1, 2, 3, 1, 2, 3, 3, 1, 2], "Sex": list("MFFMFMMFFMFM"),
+        "Age": [22, 38, 26, 35, 54, 2, 27, 14, 4, 58.5, 30, 41],
+        "Fare": [7.25, 71.3, 7.9, 53.1, 8.05, 21.1, 11.1, 30.1, 16.7, 26.5, 40, 12]})
+    info = analyse_dataframe(titanic)
+    for v in (0, 1, 2):
+        plans = auto_charts(titanic, info, v)
+        print(f"variant {v}: {len(plans)} charts")
         for p in plans:
-            print(f"   {p['type']:<8} {p['title']}")
-    try:
-        make_chart(sales, "pie", "region", "revenue", "mean")
-    except ValueError as exc:
-        print("Expected error:", exc)
+            print(f"   {p['type']:<8} {p['agg']:<6} {p['title']}")
